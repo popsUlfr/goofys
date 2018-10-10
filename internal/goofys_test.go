@@ -25,6 +25,7 @@ import (
 	"os"
 	"os/exec"
 	"os/user"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -639,10 +640,10 @@ func (r *FileHandleReader) Seek(offset int64, whence int) (int64, error) {
 }
 
 func (s *GoofysTest) testWriteFile(t *C, fileName string, size int64, write_size int) {
-	s.testWriteFileAt(t, fileName, int64(0), size, write_size)
+	s.testWriteFileAt(t, fileName, int64(0), size, write_size, true)
 }
 
-func (s *GoofysTest) testWriteFileAt(t *C, fileName string, offset int64, size int64, write_size int) {
+func (s *GoofysTest) testWriteFileAt(t *C, fileName string, offset int64, size int64, write_size int, validate bool) {
 	var fh *FileHandle
 
 	if offset == 0 {
@@ -678,13 +679,16 @@ func (s *GoofysTest) testWriteFileAt(t *C, fileName string, offset int64, size i
 
 	resp, err := s.s3.HeadObject(&s3.HeadObjectInput{Bucket: &s.fs.bucket, Key: &fileName})
 	t.Assert(err, IsNil)
-	t.Assert(*resp.ContentLength, DeepEquals, size+offset)
 
-	fr := &FileHandleReader{s.fs, fh, offset}
-	diff, err := CompareReader(fr, io.LimitReader(&SeqReader{offset}, size))
-	t.Assert(err, IsNil)
-	t.Assert(diff, Equals, -1)
-	t.Assert(fr.offset, Equals, size)
+	if validate {
+		t.Assert(*resp.ContentLength, DeepEquals, size+offset)
+
+		fr := &FileHandleReader{s.fs, fh, offset}
+		diff, err := CompareReader(fr, io.LimitReader(&SeqReader{offset}, size))
+		t.Assert(err, IsNil)
+		t.Assert(diff, Equals, -1)
+		t.Assert(fr.offset, Equals, size)
+	}
 
 	fh.Release()
 }
@@ -2177,4 +2181,49 @@ func (s *GoofysTest) TestIssue326(t *C) {
 	s.readDirIntoCache(t, root.Id)
 	t.Assert(*root.dir.Children[7].Name, Equals, "folder#1#")
 	t.Assert(*root.dir.Children[8].Name, Equals, "folder@name.something")
+}
+
+func (s *GoofysTest) TestTempFileRenameOptimization(t *C) {
+	root := s.getRoot(t)
+	root.fs.TempFileRegex = regexp.MustCompile("\\.tempstate[0-9]+$")
+	name := "file"
+	tempName := name + ".tempstate1"
+
+	s.testWriteFileAt(t, tempName, 0, 10*1024*1024+1, 128*1024, false)
+	_, err := s.LookUpInode(t, tempName)
+	t.Assert(err, IsNil)
+	_, err = s.LookUpInode(t, name)
+	t.Assert(err, Equals, syscall.ENOENT)
+
+	err = root.Rename(tempName, root, name)
+	t.Assert(err, IsNil)
+
+	_, err = s.LookUpInode(t, name)
+	t.Assert(err, IsNil)
+	_, err = s.LookUpInode(t, tempName)
+	t.Assert(err, Equals, syscall.ENOENT)
+}
+
+func (s *GoofysTest) TestTempFileRenameOptimizationMismatch(t *C) {
+	root := s.getRoot(t)
+	root.fs.TempFileRegex = regexp.MustCompile("\\.tempstate[0-9]+$")
+	name := "file"
+	tempName := name + ".tempstate1"
+	othername := "otherfile"
+
+	s.testWriteFileAt(t, tempName, 0, 10*1024*1024+1, 128*1024, false)
+	_, err := s.LookUpInode(t, tempName)
+	t.Assert(err, IsNil)
+	_, err = s.LookUpInode(t, name)
+	t.Assert(err, Equals, syscall.ENOENT)
+
+	err = root.Rename(tempName, root, othername)
+	t.Assert(err, IsNil)
+
+	_, err = s.LookUpInode(t, othername)
+	t.Assert(err, IsNil)
+	_, err = s.LookUpInode(t, name)
+	t.Assert(err, Equals, syscall.ENOENT)
+	_, err = s.LookUpInode(t, tempName)
+	t.Assert(err, Equals, syscall.ENOENT)
 }

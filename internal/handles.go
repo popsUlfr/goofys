@@ -299,6 +299,17 @@ func (inode *Inode) DeRef(n uint64) (stale bool) {
 func (parent *Inode) Unlink(name string) (err error) {
 	parent.logFuse("Unlink", name)
 
+	if pair, ok := temporaryFileMap[name]; ok {
+		delete(temporaryFileMap, name)
+
+		resp, _ := parent.fs.s3.AbortMultipartUpload(&s3.AbortMultipartUploadInput{
+			Bucket:   &parent.fs.bucket,
+			Key:      &pair.renameTo,
+			UploadId: pair.params.UploadId,
+		})
+		s3Log.Debug(resp)
+	}
+
 	fullName := parent.getChildName(name)
 
 	params := &s3.DeleteObjectInput{
@@ -345,6 +356,9 @@ func (parent *Inode) Create(
 	fh = NewFileHandle(inode)
 	fh.poolHandle = fs.bufferPool
 	fh.dirty = true
+	if fs.TempFileRegex != nil {
+		fh.tempFileOptimization = fs.TempFileRegex.MatchString(name)
+	}
 	inode.fileHandles = 1
 
 	parent.touch()
@@ -924,9 +938,45 @@ func copyObjectMaybeMultipart(fs *Goofys, size int64, from string, to string, sr
 }
 
 func renameObject(fs *Goofys, size int64, fromFullName string, toFullName string) (err error) {
-	err = copyObjectMaybeMultipart(fs, size, fromFullName, toFullName, nil, nil)
-	if err != nil {
-		return err
+	if pair, ok := temporaryFileMap[fromFullName]; ok {
+		delete(temporaryFileMap, fromFullName)
+
+		params := pair.params
+
+		s3Log.Debug(params)
+
+		resp, err := fs.s3.CompleteMultipartUpload(params)
+		if err != nil {
+			return mapAwsError(err)
+		}
+		s3Log.Debug(resp)
+
+		if pair.renameTo != toFullName {
+			// The client did not rename the expected file names.  To recover
+			// from this we complete the upload then copy from the speculated
+			// file name to the actual name.  Note that this overwrites and
+			// delete the speculated object.
+			log.Warnf("Failed optimiztion during rename, from: %v, to: %v, expected: %v",
+				fromFullName, toFullName, pair.renameTo)
+
+			err = copyObjectMaybeMultipart(fs, size, pair.renameTo, toFullName, nil, nil)
+			if err != nil {
+				return err
+			}
+
+			_, err = fs.s3.DeleteObject(&s3.DeleteObjectInput{
+				Bucket: &fs.bucket,
+				Key:    fs.key(pair.renameTo),
+			})
+			if err != nil {
+				return mapAwsError(err)
+			}
+		}
+	} else {
+		err = copyObjectMaybeMultipart(fs, size, fromFullName, toFullName, nil, nil)
+		if err != nil {
+			return err
+		}
 	}
 
 	delParams := &s3.DeleteObjectInput{
