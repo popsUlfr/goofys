@@ -38,6 +38,8 @@ type Config struct {
 	Region         string
 	RegionSet      bool
 	StorageClass   string
+	AccessKey      string
+	SecretKey      string
 	Profile        string
 	UseContentType bool
 	UseSSE         bool
@@ -50,6 +52,7 @@ type Config struct {
 	ExplicitDir  bool
 	StatCacheTTL time.Duration
 	TypeCacheTTL time.Duration
+	HTTPTimeout  time.Duration
 
 	// Debugging
 	DebugFuse  bool
@@ -83,10 +86,12 @@ func Mount(
 			TLSHandshakeTimeout:   10 * time.Second,
 			ExpectContinueTimeout: 10 * time.Second,
 		},
-		Timeout: 30 * time.Second,
+		Timeout: flags.HTTPTimeout,
 	})
 
-	if len(flags.Profile) > 0 {
+	if(config.AccessKey != "") {
+		awsConfig.Credentials = credentials.NewStaticCredentials(config.AccessKey, config.SecretKey, "")
+	} else if len(flags.Profile) > 0 {
 		awsConfig.Credentials = credentials.NewSharedCredentials("", flags.Profile)
 	}
 
