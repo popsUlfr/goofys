@@ -12,3 +12,4 @@ install:
 - make
 go:
   - 1.10.3
+go_import_path: github.com/kahing/goofys
