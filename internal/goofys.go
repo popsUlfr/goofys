@@ -21,6 +21,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"regexp"
 	"runtime/debug"
 	"strconv"
 	"strings"
@@ -102,6 +103,8 @@ type Goofys struct {
 	restorers   *Ticket
 
 	forgotCnt uint32
+
+	TempFileRegex *regexp.Regexp
 }
 
 var s3Log = GetLogger("s3")
@@ -211,6 +214,10 @@ func NewGoofys(ctx context.Context, bucket string, awsConfig *aws.Config, flags 
 
 	fs.replicators = Ticket{Total: 16}.Init()
 	fs.restorers = Ticket{Total: 8}.Init()
+
+	if flags.TempFileRegex != "" {
+		fs.TempFileRegex = regexp.MustCompile(flags.TempFileRegex)
+	}
 
 	return fs
 }
@@ -572,6 +579,13 @@ func mapAwsError(err error) error {
 
 func (fs *Goofys) key(name string) *string {
 	name = fs.prefix + name
+	return &name
+}
+
+func (fs *Goofys) tempFileOptimizationName(name string) *string {
+	if fs.TempFileRegex.MatchString(name) {
+		name = fs.TempFileRegex.ReplaceAllLiteralString(name, "")
+	}
 	return &name
 }
 

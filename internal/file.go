@@ -15,6 +15,7 @@
 package internal
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
@@ -57,10 +58,21 @@ type FileHandle struct {
 	existingReadahead int
 	seqReadAmount     uint64
 	numOOORead        uint64 // number of out of order read
+
+	// Optimize creation and renaming of temporary files by writing to the
+	// destination object and delaying completion until the rename.
+	tempFileOptimization bool
 }
 
 const MAX_READAHEAD = uint32(100 * 1024 * 1024)
 const READAHEAD_CHUNK = uint32(20 * 1024 * 1024)
+
+type TempPair struct {
+	renameTo string
+	params   *s3.CompleteMultipartUploadInput
+}
+
+var temporaryFileMap = make(map[string]TempPair)
 
 func NewFileHandle(in *Inode) *FileHandle {
 	fh := &FileHandle{inode: in}
@@ -79,8 +91,12 @@ func (fh *FileHandle) initMPU() {
 		fh.mpuWG.Done()
 	}()
 
-	fh.mpuKey = fh.inode.FullName()
 	fs := fh.inode.fs
+	if fh.tempFileOptimization {
+		fh.mpuKey = fs.tempFileOptimizationName(*fh.inode.FullName())
+	} else {
+		fh.mpuKey = fh.inode.FullName()
+	}
 
 	params := &s3.CreateMultipartUploadInput{
 		Bucket:       &fs.bucket,
@@ -101,6 +117,26 @@ func (fh *FileHandle) initMPU() {
 	}
 
 	if !fs.gcs {
+		if fh.tempFileOptimization {
+			// create zero length object to stand in for tempfile
+			input := s3.PutObjectInput{
+				Bucket: &fs.bucket,
+				Key:    fs.key(*fh.inode.FullName()),
+				Body:   bytes.NewReader([]byte{}),
+			}
+			resp, err := fs.s3.PutObject(&input)
+			if err != nil {
+				fh.lastWriteError = mapAwsError(err)
+				s3Log.Errorf("PutObject %v = %v", *fh.mpuKey, err)
+			}
+
+			s3Log.Debug(resp)
+
+			if err != nil {
+				return
+			}
+		}
+
 		resp, err := fs.s3.CreateMultipartUpload(params)
 
 		fh.mu.Lock()
@@ -156,9 +192,14 @@ func (fh *FileHandle) mpuPartNoSpawn(buf *MBuf, part int, total int64, last bool
 	en := &fh.etags[part-1]
 
 	if !fs.gcs {
+		name := *fh.inode.FullName()
+		if fh.tempFileOptimization {
+			name = *fs.tempFileOptimizationName(name)
+		}
+
 		params := &s3.UploadPartInput{
 			Bucket:     &fs.bucket,
-			Key:        fs.key(*fh.inode.FullName()),
+			Key:        fs.key(name),
 			PartNumber: aws.Int64(int64(part)),
 			UploadId:   fh.mpuId,
 			Body:       buf,
@@ -819,6 +860,11 @@ func (fh *FileHandle) FlushFile() (err error) {
 			MultipartUpload: &s3.CompletedMultipartUpload{
 				Parts: parts,
 			},
+		}
+
+		if fh.tempFileOptimization {
+			temporaryFileMap[*fh.inode.FullName()] = TempPair{*fs.tempFileOptimizationName(*fh.inode.FullName()), params}
+			return
 		}
 
 		s3Log.Debug(params)

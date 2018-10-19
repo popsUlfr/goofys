@@ -61,7 +61,7 @@ GLOBAL OPTIONS:
    {{range category .Flags ""}}{{.}}
    {{end}}
 TUNING OPTIONS:
-   {{range category .Flags "tuning"}}{{.}}
+   {{range category .Flags "tuning"}}{{if not .Hidden}}{{.}}{{end}}
    {{end}}
 AWS S3 OPTIONS:
    {{range category .Flags "aws"}}{{.}}
@@ -223,6 +223,13 @@ func NewApp() (app *cli.App) {
 				Usage: "Set the timeout on HTTP requests to S3",
 			},
 
+			cli.StringFlag{
+				Name:   "temp-file-rename-dropping-regex",
+				Usage:  "If the name of a file being written matches the regex, we treat the file as a temp file and expect it to be renamed to its final name by dropping the matched part right after write finished. This flag turns on optimization for such usage.",
+				Value:  "",
+				Hidden: true,
+			},
+
 			/////////////////////////
 			// Debugging
 			/////////////////////////
@@ -255,7 +262,7 @@ func NewApp() (app *cli.App) {
 		flagCategories[f] = "aws"
 	}
 
-	for _, f := range []string{"cheap", "no-implicit-dir", "stat-cache-ttl", "type-cache-ttl", "http-timeout"} {
+	for _, f := range []string{"cheap", "no-implicit-dir", "stat-cache-ttl", "type-cache-ttl", "http-timeout", "temp-file-rename-dropping-regex"} {
 		flagCategories[f] = "tuning"
 	}
 
@@ -303,6 +310,8 @@ type FlagStorage struct {
 	StatCacheTTL time.Duration
 	TypeCacheTTL time.Duration
 	HTTPTimeout  time.Duration
+
+	TempFileRegex string
 
 	// Debugging
 	DebugFuse  bool
@@ -359,6 +368,8 @@ func PopulateFlags(c *cli.Context) (ret *FlagStorage) {
 		StatCacheTTL: c.Duration("stat-cache-ttl"),
 		TypeCacheTTL: c.Duration("type-cache-ttl"),
 		HTTPTimeout:  c.Duration("http-timeout"),
+
+		TempFileRegex: c.String("temp-file-rename-dropping-regex"),
 
 		// S3
 		Endpoint:       c.String("endpoint"),
