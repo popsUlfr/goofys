@@ -38,6 +38,22 @@ func MinInt(a, b int) int {
 	}
 }
 
+func MaxInt64(a, b int64) int64 {
+	if a > b {
+		return a
+	} else {
+		return b
+	}
+}
+
+func MinInt64(a, b int64) int64 {
+	if a < b {
+		return a
+	} else {
+		return b
+	}
+}
+
 func MaxUInt32(a, b uint32) uint32 {
 	if a > b {
 		return a
@@ -100,4 +116,19 @@ func TryUnmount(mountPoint string) (err error) {
 		}
 	}
 	return
+}
+
+type empty struct {}
+type semaphore chan empty
+
+func (sem semaphore) P(n int) {
+	for i := 0; i < n; i++ {
+		sem <- empty{}
+	}
+}
+
+func (sem semaphore) V(n int) {
+	for i := 0; i < n; i++ {
+		<-sem
+	}
 }

@@ -748,11 +748,9 @@ func (parent *Inode) Rename(from string, newParent *Inode, to string) (err error
 }
 
 func mpuCopyPart(fs *Goofys, from string, to string, mpuId string, bytes string, part int64,
-	wg *sync.WaitGroup, srcEtag *string, etag **string, errout *error) {
+	sem semaphore, srcEtag *string, etag **string, errout *error) {
 
-	defer func() {
-		wg.Done()
-	}()
+	defer sem.P(1)
 
 	// XXX use CopySourceIfUnmodifiedSince to ensure that
 	// we are copying from the same object
@@ -779,41 +777,54 @@ func mpuCopyPart(fs *Goofys, from string, to string, mpuId string, bytes string,
 	return
 }
 
-func sizeToParts(size int64) int {
-	const PART_SIZE = 5 * 1024 * 1024 * 1024
+func sizeToParts(size int64) (int, int64) {
+	const MAX_S3_MPU_SIZE = 5 * 1024 * 1024 * 1024 * 1024
+	if (size > MAX_S3_MPU_SIZE) {
+		panic(fmt.Sprintf("object size: %v exceeds maximum S3 MPU size: %v", size, MAX_S3_MPU_SIZE))
+	}
 
-	nParts := int(size / PART_SIZE)
-	if size%PART_SIZE != 0 {
+	// Use the maximum number of parts to allow the most server-side copy
+	// parallelism.
+	const MAX_PARTS = 10 * 1000
+	const MIN_PART_SIZE = 50 * 1024 * 1024
+	partSize := MaxInt64(size / (MAX_PARTS - 1), MIN_PART_SIZE)
+
+	nParts := int(size / partSize)
+	if size%partSize != 0 {
 		nParts++
 	}
-	return nParts
+
+	return nParts, partSize
 }
 
 func mpuCopyParts(fs *Goofys, size int64, from string, to string, mpuId string,
-	wg *sync.WaitGroup, srcEtag *string, etags []*string, err *error) {
-
-	const PART_SIZE = 5 * 1024 * 1024 * 1024
+	srcEtag *string, etags []*string, partSize int64, err *error) {
 
 	rangeFrom := int64(0)
 	rangeTo := int64(0)
 
+	MAX_CONCURRENCY := MinInt(100, len(etags))
+	sem := make(semaphore, MAX_CONCURRENCY)
+	sem.P(MAX_CONCURRENCY)
+
 	for i := int64(1); rangeTo < size; i++ {
 		rangeFrom = rangeTo
-		rangeTo = i * PART_SIZE
+		rangeTo = i * partSize
 		if rangeTo > size {
 			rangeTo = size
 		}
 		bytes := fmt.Sprintf("bytes=%v-%v", rangeFrom, rangeTo-1)
 
-		wg.Add(1)
-		go mpuCopyPart(fs, from, to, mpuId, bytes, i, wg, srcEtag, &etags[i-1], err)
+		sem.V(1)
+		go mpuCopyPart(fs, from, to, mpuId, bytes, i, sem, srcEtag, &etags[i-1], err)
 	}
+
+	sem.V(MAX_CONCURRENCY)
 }
 
 func copyObjectMultipart(fs *Goofys, size int64, from string, to string, mpuId string,
 	srcEtag *string, metadata map[string]*string) (err error) {
-	var wg sync.WaitGroup
-	nParts := sizeToParts(size)
+	nParts, partSize := sizeToParts(size)
 	etags := make([]*string, nParts)
 
 	if mpuId == "" {
@@ -844,8 +855,7 @@ func copyObjectMultipart(fs *Goofys, size int64, from string, to string, mpuId s
 		mpuId = *resp.UploadId
 	}
 
-	mpuCopyParts(fs, size, from, to, mpuId, &wg, srcEtag, etags, &err)
-	wg.Wait()
+	mpuCopyParts(fs, size, from, to, mpuId, srcEtag, etags, partSize, &err)
 
 	if err != nil {
 		return
@@ -895,7 +905,7 @@ func copyObjectMaybeMultipart(fs *Goofys, size int64, from string, to string, sr
 
 	from = fs.bucket + "/" + *fs.key(from)
 
-	if !fs.gcs && size > 5*1024*1024*1024 {
+	if !fs.gcs && size > 50*1024*1024 {
 		return copyObjectMultipart(fs, size, from, to, "", srcEtag, metadata)
 	}
 
