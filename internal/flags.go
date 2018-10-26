@@ -226,7 +226,7 @@ func NewApp() (app *cli.App) {
 			cli.StringFlag{
 				Name:   "temp-file-rename-dropping-regex",
 				Usage:  "If the name of a file being written matches the regex, we treat the file as a temp file and expect it to be renamed to its final name by dropping the matched part right after write finished. This flag turns on optimization for such usage.",
-				Value:  "",
+				Value:  "\\.tempstate[0-9]+$",
 				Hidden: true,
 			},
 
