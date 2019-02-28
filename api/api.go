@@ -102,6 +102,17 @@ func Mount(
 		awsConfig.Credentials = credentials.NewStaticCredentials(config.AccessKey, config.SecretKey, "")
 	} else if len(flags.Profile) > 0 {
 		awsConfig.Credentials = credentials.NewSharedCredentials("", flags.Profile)
+	} else {
+		if bucketName[0] == '/' {
+			// S3 bucket name cannot have /. In this case
+			// we assume it's a dbfs path and talk to the
+			// data daemon to figure out what's the real
+			// bucket mapped at that path
+			err = internal.ConfigureDatabricksMount(&bucketName, &flags, awsConfig)
+			if err != nil {
+				return
+			}
+		}
 	}
 
 	if len(flags.Endpoint) > 0 {
