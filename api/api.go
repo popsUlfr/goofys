@@ -91,7 +91,14 @@ func Mount(
 		Timeout: flags.HTTPTimeout,
 	})
 
-	if(config.AccessKey != "") {
+	if flags.DebugS3 {
+		s3Log := GetLogger("s3")
+
+		awsConfig.LogLevel = aws.LogLevel(aws.LogDebug | aws.LogDebugWithRequestErrors)
+		s3Log.Level = logrus.DebugLevel
+	}
+
+	if config.AccessKey != "" {
 		awsConfig.Credentials = credentials.NewStaticCredentials(config.AccessKey, config.SecretKey, "")
 	} else if len(flags.Profile) > 0 {
 		awsConfig.Credentials = credentials.NewSharedCredentials("", flags.Profile)

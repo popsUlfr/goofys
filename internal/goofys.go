@@ -40,8 +40,6 @@ import (
 	"github.com/jacobsa/fuse"
 	"github.com/jacobsa/fuse/fuseops"
 	"github.com/jacobsa/fuse/fuseutil"
-
-	"github.com/sirupsen/logrus"
 )
 
 // goofys is a Filey System written in Go. All the backend data is
@@ -125,11 +123,6 @@ func NewGoofys(ctx context.Context, bucket string, awsConfig *aws.Config, flags 
 
 		fs.bucket = bucket[0:colon]
 		bucket = fs.bucket
-	}
-
-	if flags.DebugS3 {
-		awsConfig.LogLevel = aws.LogLevel(aws.LogDebug | aws.LogDebugWithRequestErrors)
-		s3Log.Level = logrus.DebugLevel
 	}
 
 	if strings.HasSuffix(flags.Endpoint, "/storage.googleapis.com") {
