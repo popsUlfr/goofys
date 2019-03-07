@@ -159,7 +159,12 @@ func (s *DatabricksSession) configureDatabricksMount(mountPoint string, prefix s
 	}
 	bucketSpec = fmt.Sprintf("%v:%v/%v", bucket, bucketPrefix, prefix)
 
-	awsConfig.Credentials = credentials.NewCredentials(NewDatabricksCredentialsProvider(s, mountPoint))
+	if m.Configurations.CredentialsType == "SessionToken" {
+		awsConfig.Credentials = credentials.NewCredentials(NewDatabricksCredentialsProvider(s, mountPoint))
+	} else {
+		// this could be empty which means default, so
+		// fallback to default aws default provider chain
+	}
 	flags.UseSSE = true
 	if m.Configurations.Endpoint != "" {
 		flags.Endpoint = "https://" + m.Configurations.Endpoint
