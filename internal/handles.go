@@ -129,12 +129,14 @@ func (inode *Inode) errFuse(op string, args ...interface{}) {
 }
 
 func (inode *Inode) ToDir() {
-	inode.Attributes = InodeAttributes{
-		Size: 4096,
-		// Mtime intentionally not initialized
+	if inode.dir == nil {
+		inode.Attributes = InodeAttributes{
+			Size: 4096,
+			// Mtime intentionally not initialized
+		}
+		inode.dir = &DirInodeData{}
+		inode.KnownSize = &inode.fs.rootAttrs.Size
 	}
-	inode.dir = &DirInodeData{}
-	inode.KnownSize = &inode.fs.rootAttrs.Size
 }
 
 func (parent *Inode) findChild(name string) (inode *Inode) {
@@ -779,7 +781,7 @@ func mpuCopyPart(fs *Goofys, from string, to string, mpuId string, bytes string,
 
 func sizeToParts(size int64) (int, int64) {
 	const MAX_S3_MPU_SIZE = 5 * 1024 * 1024 * 1024 * 1024
-	if (size > MAX_S3_MPU_SIZE) {
+	if size > MAX_S3_MPU_SIZE {
 		panic(fmt.Sprintf("object size: %v exceeds maximum S3 MPU size: %v", size, MAX_S3_MPU_SIZE))
 	}
 
@@ -787,7 +789,7 @@ func sizeToParts(size int64) (int, int64) {
 	// parallelism.
 	const MAX_PARTS = 10 * 1000
 	const MIN_PART_SIZE = 50 * 1024 * 1024
-	partSize := MaxInt64(size / (MAX_PARTS - 1), MIN_PART_SIZE)
+	partSize := MaxInt64(size/(MAX_PARTS-1), MIN_PART_SIZE)
 
 	nParts := int(size / partSize)
 	if size%partSize != 0 {
@@ -1069,6 +1071,7 @@ func (parent *Inode) insertSubTree(path string, obj *s3.Object, dirs map[*Inode]
 			// until we get to the leaf
 			dirs[inode] = false
 
+			inode.ToDir()
 			inode.addDotAndDotDot()
 			inode.insertSubTree(path, obj, dirs)
 		}
