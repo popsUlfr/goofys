@@ -23,6 +23,8 @@ func NewDatabricksConf() (conf *DatabricksConf, err error) {
 }
 
 func (conf *DatabricksConf) Load() (err error) {
+	// data-client.conf is generated from
+	// https://github.com/databricks/universe/blob/master/daemon/node/src/main/scala/com/databricks/backend/daemon/node/container/LxcContainerManager.scala#L630
 	err = conf.parse("/databricks/data/conf/data-client.conf", "/databricks/common/conf/deploy.conf")
 	return
 }
@@ -49,7 +51,8 @@ func (conf *DatabricksConf) parse(clientConf string, deployConf string) (err err
 			return
 		}
 
-		// hocon's path splitting is wrong wrt quotes, manually get the quoted part
+		// https://github.com/go-akka/configuration/issues/8
+		// go-akka/configuration's path splitting is wrong wrt quotes, manually get the quoted part
 		driver := data.GetNode("driver.spark.hadoop")
 		if driver == nil {
 			return
@@ -84,7 +87,8 @@ func loadHocon(file string) (conf *hocon.Config, err error) {
 
 	conf = hocon.ParseString(string(data))
 	if conf == nil {
-		// this is a lie, hocon currently panics if it cannot parse the file
+		// https://github.com/go-akka/configuration/issues/9
+		// this is a lie, go-akka/configuration currently panics if it cannot parse the file
 		err = fmt.Errorf("cannot parse config: %v", file)
 		return
 	}

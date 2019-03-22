@@ -265,6 +265,18 @@ func ConfigureDatabricksMount(bucketSpec *string,
 	}
 
 	// ensure that we don't use a proxy to talk to the data daemon
+	// c1-staging (which emulates the CapitalOne setup) talks to
+	// the internt via a proxy (configured through `HTTP_PROXY`
+	// and `NO_PROXY` environment variables). `NO_PROXY` contains
+	// `.local` but since we talk to the data daemon via an
+	// internal IP, the exception list doesn't work.
+	//
+	// this may not be needed on production startup path because
+	// it looks like `HTTP_PROXY` isn't set yet by the time
+	// dbfs_fuse is started (which is why get_root_mount_info.py
+	// works), but in development we need to restart from a
+	// notebook where the proxy config is already set. Relying on
+	// environment ordering is also error-prone
 	transport := http.DefaultTransport
 	if t, ok := transport.(*http.Transport); ok {
 		t.Proxy = nil
