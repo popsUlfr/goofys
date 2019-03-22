@@ -24,38 +24,6 @@ type DatabricksSession struct {
 	headers http.Header
 }
 
-func parseDatabricksDaemonHost(conf string) (host string, err error) {
-	lines := strings.Split(conf, "\n")
-
-	for _, line := range lines {
-		kv := strings.SplitN(line, "=", 2)
-		if len(kv) != 2 {
-			continue
-		}
-
-		kv[0] = strings.Trim(kv[0], " \t")
-		kv[1] = strings.Trim(kv[1], " \t")
-
-		if kv[0] == "databricks.daemon.data.serverHost" {
-			host = strings.Trim(kv[1], "\"")
-			return
-		}
-	}
-
-	err = fmt.Errorf("unable to parse for serverHost: %v", conf)
-	return
-}
-
-// generated from https://github.com/databricks/universe/blob/master/daemon/node/src/main/scala/com/databricks/backend/daemon/node/container/LxcContainerManager.scala#L630
-func GetDatabricksDaemonHost() (host string, err error) {
-	conf, err := ioutil.ReadFile("/databricks/data/conf/data-client.conf")
-	if err != nil {
-		return
-	}
-
-	return parseDatabricksDaemonHost(string(conf))
-}
-
 func NewDatabricksSession(client *http.Client, host string, port uint16) (*DatabricksSession, error) {
 	session := DatabricksSession{
 		client: retryablehttp.Client{
@@ -143,8 +111,12 @@ func (s *DatabricksSession) FindMount(mountPoint string) (*GetMountsV2Response, 
 	return nil, err
 }
 
-func (s *DatabricksSession) configureDatabricksMount(mountPoint string, prefix string,
+func (s *DatabricksSession) configureDatabricksMount(config *DatabricksConf, mountPoint string, prefix string,
 	flags *FlagStorage, awsConfig *aws.Config) (bucketSpec string, err error) {
+
+	if config.Endpoint != "" {
+		flags.Endpoint = "https://" + config.Endpoint
+	}
 
 	var m *GetMountsV2Response
 	m, err = s.FindMount(mountPoint)
@@ -159,7 +131,7 @@ func (s *DatabricksSession) configureDatabricksMount(mountPoint string, prefix s
 	}
 	bucketSpec = fmt.Sprintf("%v:%v/%v", bucket, bucketPrefix, prefix)
 
-	if m.Configurations.CredentialsType == "SessionToken" {
+	if m.Configurations.CredentialsType == "SessionToken" || config.SessionTokenAllowed {
 		awsConfig.Credentials = credentials.NewCredentials(NewDatabricksCredentialsProvider(s, mountPoint))
 	} else {
 		// this could be empty which means default, so
@@ -282,15 +254,24 @@ func (p *DatabricksCredentialsProvider) IsExpired() bool {
 func ConfigureDatabricksMount(bucketSpec *string,
 	flags *FlagStorage, awsConfig *aws.Config) (err error) {
 
-	var host string
-	host, err = GetDatabricksDaemonHost()
+	config, err := NewDatabricksConf()
 	if err != nil {
-		err = fmt.Errorf("databricks session: %v", err)
 		return
 	}
 
+	err = config.Load()
+	if err != nil {
+		return
+	}
+
+	// ensure that we don't use a proxy to talk to the data daemon
+	transport := http.DefaultTransport
+	if t, ok := transport.(*http.Transport); ok {
+		t.Proxy = nil
+	}
+
 	var session *DatabricksSession
-	session, err = NewDatabricksSession(&http.Client{}, host, DATABRICKS_DATA_DAEMON_CONTROL_PORT)
+	session, err = NewDatabricksSession(&http.Client{Transport: transport}, config.DaemonHost, DATABRICKS_DATA_DAEMON_CONTROL_PORT)
 	if err != nil {
 		err = fmt.Errorf("databricks session: %v", err)
 		return
@@ -306,7 +287,7 @@ func ConfigureDatabricksMount(bucketSpec *string,
 	// the prefix is in addition to the storage prefix for the mount point
 	prefix := strings.Trim(mountAndPrefix[1], "/")
 
-	*bucketSpec, err = session.configureDatabricksMount(mountPoint, prefix, flags, awsConfig)
+	*bucketSpec, err = session.configureDatabricksMount(config, mountPoint, prefix, flags, awsConfig)
 	log.Infof("using detected databricks mountpoint: %v", *bucketSpec)
 	return
 }

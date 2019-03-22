@@ -22,20 +22,6 @@ type DatabricksConfTest struct{}
 
 var _ = Suite(&DatabricksConfTest{})
 
-func (s *DatabricksConfTest) TestParseDatabricksDaemonHost(t *C) {
-	host, err := parseDatabricksDaemonHost("databricks.daemon.data.serverHost = \"10.0.167.16\"")
-	t.Assert(err, IsNil)
-	t.Assert(host, Equals, "10.0.167.16")
-
-	host, err = parseDatabricksDaemonHost("\n# some comment\ndatabricks.daemon.data.serverHost=\"10.0.167.16\"\n")
-	t.Assert(err, IsNil)
-	t.Assert(host, Equals, "10.0.167.16")
-
-	host, err = parseDatabricksDaemonHost("databricks.daemon.data.serverHost=\"10.0.167.16\"")
-	t.Assert(err, IsNil)
-	t.Assert(host, Equals, "10.0.167.16")
-}
-
 type DatabricksTest struct {
 	server  *httptest.Server
 	session *DatabricksSession
@@ -114,21 +100,39 @@ func (s *DatabricksTest) TestDatabricksGetSessionCredentials(t *C) {
 func (s *DatabricksTest) TestConfigureDatabricks(t *C) {
 	flags := FlagStorage{}
 	awsConfig := aws.Config{}
+	conf := DatabricksConf{AutoDetectEndpoint: true}
 
-	bucketSpec, err := s.session.configureDatabricksMount("/", "ml", &flags, &awsConfig)
+	bucketSpec, err := s.session.configureDatabricksMount(&conf, "/", "ml", &flags, &awsConfig)
 	t.Assert(err, IsNil)
 	t.Assert(bucketSpec, Equals, "databricks-staging-storage-oregon:shard-dogfood/0/ml")
 	t.Assert(flags.UseSSE, Equals, true)
 	t.Assert(flags.Endpoint, Equals, "")
+	t.Assert(awsConfig.Credentials, NotNil)
 
 	flags = FlagStorage{}
 	awsConfig = aws.Config{}
+	conf = DatabricksConf{
+		AutoDetectEndpoint: false,
+		Endpoint:           "s3.us-iso-east-1.c2s.ic.gov",
+	}
 
-	bucketSpec, err = s.session.configureDatabricksMount("/mnt/c2s", "ml", &flags, &awsConfig)
+	bucketSpec, err = s.session.configureDatabricksMount(&conf, "/mnt/c2s", "ml", &flags, &awsConfig)
 	t.Assert(err, IsNil)
 	t.Assert(bucketSpec, Equals, "databricks-c2s:shard-dogfood/0/ml")
 	t.Assert(flags.UseSSE, Equals, true)
-	t.Assert(flags.Endpoint, Equals, "https://s3.us-east-1.amazonaws.com")
+	t.Assert(flags.Endpoint, Equals, "https://s3.us-iso-east-1.c2s.ic.gov")
+	t.Assert(awsConfig.Credentials, IsNil)
+}
+
+func (s *DatabricksTest) TestParseDatabricksDeployConf(t *C) {
+	conf, err := NewDatabricksConf()
+	t.Assert(err, IsNil)
+
+	err = conf.parse("", "../test/databricks_deploy.conf")
+	t.Assert(err, IsNil)
+	t.Assert(conf.SessionTokenAllowed, Equals, false)
+	t.Assert(conf.AutoDetectEndpoint, Equals, false)
+	t.Assert(conf.Endpoint, Equals, "s3.us-iso-east-1.c2s.ic.gov")
 }
 
 type DatabricksTestServer struct {
@@ -198,8 +202,6 @@ func (s *DatabricksTestServer) ServeHTTP(w http.ResponseWriter, r *http.Request)
 		configurations = map[string]string{
 			"fs.s3a.server-side-encryption-algorithm": "AES256",
 			"fs.s3a.sessionToken.id":                  "/",
-			"fs.s3a.credentialsType":                  "SessionToken",
-			"fs.s3a.endpoint":                         "s3.us-east-1.amazonaws.com",
 		}
 		configBlob, err = json.Marshal(configurations)
 		t.Assert(err, IsNil)
