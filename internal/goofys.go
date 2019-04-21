@@ -604,8 +604,8 @@ func (fs *Goofys) LookUpInode(
 	parent := fs.getInodeOrDie(op.Parent)
 	fs.mu.Unlock()
 
-	parent.mu.Lock()
 	fs.mu.Lock()
+	parent.mu.Lock()
 	inode = parent.findChildUnlockedFull(op.Name)
 	if inode != nil {
 		ok = true
@@ -627,8 +627,8 @@ func (fs *Goofys) LookUpInode(
 	} else {
 		ok = false
 	}
-	fs.mu.Unlock()
 	parent.mu.Unlock()
+	fs.mu.Unlock()
 
 	if !ok {
 		var newInode *Inode
@@ -650,17 +650,17 @@ func (fs *Goofys) LookUpInode(
 		}
 
 		if inode == nil {
+			fs.mu.Lock()
 			parent.mu.Lock()
 			// check again if it's there, could have been
 			// added by another lookup or readdir
 			inode = parent.findChildUnlockedFull(op.Name)
 			if inode == nil {
-				fs.mu.Lock()
 				inode = newInode
 				fs.insertInode(parent, inode)
-				fs.mu.Unlock()
 			}
 			parent.mu.Unlock()
+			fs.mu.Unlock()
 		} else {
 			if newInode.Attributes.Mtime.IsZero() {
 				newInode.Attributes.Mtime = inode.Attributes.Mtime
@@ -699,14 +699,12 @@ func (fs *Goofys) ForgetInode(
 	if stale {
 		delete(fs.inodes, op.Inode)
 		fs.forgotCnt += 1
-		fs.mu.Unlock()
 
 		if inode.Parent != nil {
 			inode.Parent.removeChild(inode)
 		}
-	} else {
-		fs.mu.Unlock()
 	}
+	fs.mu.Unlock()
 
 	return
 }
